@@ -153,6 +153,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // DefaultDebugPath used by HandleDebugHTTP
@@ -180,8 +181,6 @@ type Request struct {
 	ServiceMethod string // format: "Service.Method"
 	Seq           uint64 // sequence number chosen by client
 	Arg           any
-
-	next *Request // for free list in Server
 }
 
 // Response written for every return. It is used internally
@@ -192,18 +191,47 @@ type Response struct {
 	Seq           uint64 // echoes that of the request
 	Reply         any
 	Error         string // error, if any.
+}
 
-	next *Response // for free list in Server
+type node[T any] struct {
+	value T
+	next  *node[T]
+}
+
+type freeList[T any] struct {
+	sync.Mutex
+	free *node[T]
+	zero node[T]
+}
+
+func (l *freeList[T]) Get() (x *T) {
+	l.Lock()
+	n := l.free
+	if n == nil {
+		x = &new(node[T]).value
+	} else {
+		x = &n.value
+		l.free = n.next
+		*n = l.zero
+	}
+	l.Unlock()
+	return x
+}
+
+func (l *freeList[T]) Put(x *T) {
+	n := (*node[T])(unsafe.Pointer(x))
+	l.Lock()
+	n.next = l.free
+	l.free = n
+	l.Unlock()
 }
 
 // Server represents a Server.
 type Server struct {
 	serviceMap sync.Map // map[string]*service
 
-	reqLock  sync.Mutex // protects freeReq
-	freeReq  *Request
-	respLock sync.Mutex // protects freeResp
-	freeResp *Response
+	freeReq  freeList[Request]
+	freeResp freeList[Response]
 }
 
 // NewServer returns a new Server.
@@ -461,43 +489,19 @@ func (server *Server) ServeCodec(codec ServerCodec) {
 }
 
 func (server *Server) getRequest() *Request {
-	server.reqLock.Lock()
-	req := server.freeReq
-	if req == nil {
-		req = new(Request)
-	} else {
-		server.freeReq = req.next
-		*req = Request{}
-	}
-	server.reqLock.Unlock()
-	return req
+	return server.freeReq.Get()
 }
 
 func (server *Server) freeRequest(req *Request) {
-	server.reqLock.Lock()
-	req.next = server.freeReq
-	server.freeReq = req
-	server.reqLock.Unlock()
+	server.freeReq.Put(req)
 }
 
 func (server *Server) getResponse() *Response {
-	server.respLock.Lock()
-	resp := server.freeResp
-	if resp == nil {
-		resp = new(Response)
-	} else {
-		server.freeResp = resp.next
-		*resp = Response{}
-	}
-	server.respLock.Unlock()
-	return resp
+	return server.freeResp.Get()
 }
 
 func (server *Server) freeResponse(resp *Response) {
-	server.respLock.Lock()
-	resp.next = server.freeResp
-	server.freeResp = resp
-	server.respLock.Unlock()
+	server.freeResp.Put(resp)
 }
 
 type temporary interface {
