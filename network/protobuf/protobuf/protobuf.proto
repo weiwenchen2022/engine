@@ -1,0 +1,30 @@
+syntax = "proto3";
+package protobuf;
+
+option go_package = "github.com/weiwenchen2022/engine/network/protobuf";
+
+import "google/protobuf/any.proto";
+
+message Request {
+    string method = 1;
+    google.protobuf.Any arg = 2;
+    google.protobuf.Any id = 3;
+}
+
+message Response {
+    google.protobuf.Any id = 1;
+    google.protobuf.Any result = 2;
+    google.protobuf.Any error = 3;
+}
+
+message InvalidRequest {}
+
+message null {}
+
+message Id {
+    uint64 id = 1;
+}
+
+message String {
+    string str = 1;
+}
